@@ -49,6 +49,14 @@ module.exports = (ingress, outgress) => edfsm({
 	// Read mode
 	ctx.mode = req.cstr();
 
+	// parse options according to rfc2347
+	ctx.options = {};
+	let key = '';
+	while (key = req.cstr()) {
+		ctx.options[key] = req.cstr(); // FIXME dont use key as index directly FIXME
+	}
+	//console.log(ctx.options);
+
 	next('getData');
 }).state('getData', (ctx, i, o, next) => {
 	// Start searching a route for given filename
@@ -70,7 +78,7 @@ module.exports = (ingress, outgress) => edfsm({
 				ctx.data = data;
 				ctx.block = 0;
 				ctx.blocksize = 512;
-				next('prepareDataPacket');
+				next('oack');
 			}, (err) => {
 				if (err instanceof Error) next(err);
 				else tryRoute(i + 1);
@@ -79,7 +87,51 @@ module.exports = (ingress, outgress) => edfsm({
 			tryRoute(i + 1);
 		}
 	}
+}).state('oack', (ctx, i, o, next) => {
+	if (!Object.keys(ctx.options).length) return next('prepareDataPacket');
+
+	// Create header
+	const header = Buffer.alloc(2);
+	header.writeUInt16BE(6, 0); // Opcode
+
+	const options = Object.entries(ctx.options).map(([k, v])=>{
+		let acceptedValue;
+
+		if (k === 'blksize') {
+			ctx.blocksize = Math.min(v, 1428);
+			acceptedValue = String(ctx.blocksize);
+		} else if (k === 'windowsize') {
+			acceptedValue = '1';
+		} else if (k === 'tsize') {
+			acceptedValue = String(ctx.data.length);
+		}
+
+		const str = typeof acceptedValue === 'string' ? `${k}\0${acceptedValue}\0` : '';
+		const option = new Buffer(str.length);
+		option.write(str, 0); // ascii
+		return option;
+	});
+
+	//console.log(options);
+
+	const packet = Buffer.concat([header, ...options]);
+
+	// Send OACK
+	o(ctx.clientKey, packet);
+
+	i(ctx.clientKey, (msg) => {
+		// Ignore other packets and wrong block numbers
+		if (msg.readUInt16BE(0) !== 4) return;
+		if (msg.readUInt16BE(2) !== 0) return;
+
+		//console.log('got ack for OACK', msg.readUInt16BE(2));
+
+		// Successfully acked
+		next('prepareDataPacket');
+	});
+	next.timeout(1000, 'oack');
 }).state('prepareDataPacket', (ctx, i, o, next) => {
+	//console.log('preparing packet', ctx.block);
 	// Create header
 	const header = Buffer.alloc(4);
 	header.writeUInt16BE(3, 0); // Opcode
@@ -96,6 +148,7 @@ module.exports = (ingress, outgress) => edfsm({
 	// Next state
 	next('sendDataPacket');
 }).state('sendDataPacket', (ctx, i, o, next) => {
+	//console.log('sending packet', ctx.block, 'length', ctx.packet.length, 'try', ctx.try);
 	// Abort after the third try
 	if (ctx.try++ > 3) return next(null);
 
@@ -107,6 +160,8 @@ module.exports = (ingress, outgress) => edfsm({
 		// Ignore other packets and wrong block numbers
 		if (msg.readUInt16BE(0) !== 4) return;
 		if (msg.readUInt16BE(2) !== ctx.block) return;
+
+		//console.log('got ack for', msg.readUInt16BE(2));
 
 		// Successfully acked
 		// If sent packet had full block size, send next packet
@@ -120,12 +175,15 @@ module.exports = (ingress, outgress) => edfsm({
 }).final((ctx, i, o, end, err, lastState) => {
 	// Send error message if FSM has been destroyed with an Error
 	if (err) {
+		//console.error(err);
 		const error = Buffer.alloc(5 + err.message.length);
 		error.writeUInt16BE(5, 0); // Opcode
 		error.writeUInt16BE(getErrorCode(err.message), 2); // ErrorCode
 		error.write(err.message, 4);
 		o(ctx.clientKey, error);
 	}
+
+	//console.log('request complete');
 
 	end();
 });
