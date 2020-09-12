@@ -49,6 +49,8 @@ module.exports = (ingress, outgress) => edfsm({
 	// Read mode
 	ctx.mode = req.cstr();
 
+	ctx.try = 0;
+
 	// parse options according to rfc2347
 	ctx.options = {};
 	let key = '';
@@ -88,6 +90,9 @@ module.exports = (ingress, outgress) => edfsm({
 		}
 	}
 }).state('oack', (ctx, i, o, next) => {
+	// Abort after the third try
+	if (ctx.try++ > 3) return next(null);
+
 	if (!Object.keys(ctx.options).length) return next('prepareDataPacket');
 
 	// Create header
@@ -106,13 +111,13 @@ module.exports = (ingress, outgress) => edfsm({
 			acceptedValue = String(ctx.data.length);
 		}
 
+		//console.log('option', k, v, '->', acceptedValue);
+
 		const str = typeof acceptedValue === 'string' ? `${k}\0${acceptedValue}\0` : '';
 		const option = new Buffer(str.length);
 		option.write(str, 0); // ascii
 		return option;
 	});
-
-	//console.log(options);
 
 	const packet = Buffer.concat([header, ...options]);
 
@@ -131,7 +136,7 @@ module.exports = (ingress, outgress) => edfsm({
 	});
 	next.timeout(1000, 'oack');
 }).state('prepareDataPacket', (ctx, i, o, next) => {
-	//console.log('preparing packet', ctx.block);
+	//console.log('preparing packet', ctx.block + 1);
 	// Create header
 	const header = Buffer.alloc(4);
 	header.writeUInt16BE(3, 0); // Opcode
@@ -148,7 +153,8 @@ module.exports = (ingress, outgress) => edfsm({
 	// Next state
 	next('sendDataPacket');
 }).state('sendDataPacket', (ctx, i, o, next) => {
-	//console.log('sending packet', ctx.block, 'length', ctx.packet.length, 'try', ctx.try);
+	//const percentage = 100 * (ctx.block * ctx.blocksize) / ctx.data.length
+	//console.log('sending packet', ctx.block, 'length', ctx.packet.length, percentage.toFixed(0), '%', 'try', ctx.try);
 	// Abort after the third try
 	if (ctx.try++ > 3) return next(null);
 
