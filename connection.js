@@ -17,6 +17,10 @@ Packet.prototype.cstr = function () {
 	return this.buf.slice(start, this.ptr++).toString();
 };
 
+Packet.prototype.endReached = function () {
+	return this.ptr > this.buf.length;
+};
+
 const getErrorCode = (message) => {
 	switch (message) {
 		case 'File not found.': return 1;
@@ -52,12 +56,14 @@ module.exports = (ingress, outgress) => edfsm({
 	ctx.try = 0;
 
 	// parse options according to rfc2347
-	ctx.options = {};
-	let key = '';
-	while (key = req.cstr()) {
-		ctx.options[key] = req.cstr(); // FIXME dont use key as index directly FIXME
+	ctx.options = new Map();
+
+	while (!req.endReached()) {
+		const key = req.cstr();
+		const val = req.cstr();
+		ctx.options.set(key, val);
 	}
-	//console.log(ctx.options);
+	// console.log(ctx.options);
 
 	next('getData');
 }).state('getData', (ctx, i, o, next) => {
@@ -93,13 +99,14 @@ module.exports = (ingress, outgress) => edfsm({
 	// Abort after the third try
 	if (ctx.try++ > 3) return next(null);
 
-	if (!Object.keys(ctx.options).length) return next('prepareDataPacket');
+	if (!ctx.options.size) return next('prepareDataPacket');
 
 	// Create header
 	const header = Buffer.alloc(2);
 	header.writeUInt16BE(6, 0); // Opcode
 
-	const options = Object.entries(ctx.options).map(([k, v])=>{
+	console.log(ctx.options);
+	const options = [...ctx.options.entries()].map(([k, v]) => {
 		let acceptedValue;
 
 		if (k === 'blksize') {
@@ -111,11 +118,11 @@ module.exports = (ingress, outgress) => edfsm({
 			acceptedValue = String(ctx.data.length);
 		}
 
-		//console.log('option', k, v, '->', acceptedValue);
+		// console.log('option', k, v, '->', acceptedValue);
 
 		const str = typeof acceptedValue === 'string' ? `${k}\0${acceptedValue}\0` : '';
-		const option = new Buffer(str.length);
-		option.write(str, 0); // ascii
+		const option = Buffer.alloc(str.length);
+		option.write(str, 0); // todo ascii
 		return option;
 	});
 
@@ -129,14 +136,14 @@ module.exports = (ingress, outgress) => edfsm({
 		if (msg.readUInt16BE(0) !== 4) return;
 		if (msg.readUInt16BE(2) !== 0) return;
 
-		//console.log('got ack for OACK', msg.readUInt16BE(2));
+		// console.log('got ack for OACK', msg.readUInt16BE(2));
 
 		// Successfully acked
 		next('prepareDataPacket');
 	});
 	next.timeout(1000, 'oack');
 }).state('prepareDataPacket', (ctx, i, o, next) => {
-	//console.log('preparing packet', ctx.block + 1);
+	// console.log('preparing packet', ctx.block + 1);
 	// Create header
 	const header = Buffer.alloc(4);
 	header.writeUInt16BE(3, 0); // Opcode
@@ -153,8 +160,8 @@ module.exports = (ingress, outgress) => edfsm({
 	// Next state
 	next('sendDataPacket');
 }).state('sendDataPacket', (ctx, i, o, next) => {
-	//const percentage = 100 * (ctx.block * ctx.blocksize) / ctx.data.length
-	//console.log('sending packet', ctx.block, 'length', ctx.packet.length, percentage.toFixed(0), '%', 'try', ctx.try);
+	// const percentage = 100 * (ctx.block * ctx.blocksize) / ctx.data.length
+	// console.log('sending packet', ctx.block, 'length', ctx.packet.length, percentage.toFixed(0), '%', 'try', ctx.try);
 	// Abort after the third try
 	if (ctx.try++ > 3) return next(null);
 
@@ -167,7 +174,7 @@ module.exports = (ingress, outgress) => edfsm({
 		if (msg.readUInt16BE(0) !== 4) return;
 		if (msg.readUInt16BE(2) !== ctx.block) return;
 
-		//console.log('got ack for', msg.readUInt16BE(2));
+		// console.log('got ack for', msg.readUInt16BE(2));
 
 		// Successfully acked
 		// If sent packet had full block size, send next packet
@@ -181,7 +188,7 @@ module.exports = (ingress, outgress) => edfsm({
 }).final((ctx, i, o, end, err, lastState) => {
 	// Send error message if FSM has been destroyed with an Error
 	if (err) {
-		//console.error(err);
+		// console.error(err);
 		const error = Buffer.alloc(5 + err.message.length);
 		error.writeUInt16BE(5, 0); // Opcode
 		error.writeUInt16BE(getErrorCode(err.message), 2); // ErrorCode
@@ -189,7 +196,7 @@ module.exports = (ingress, outgress) => edfsm({
 		o(ctx.clientKey, error);
 	}
 
-	//console.log('request complete');
+	// console.log('request complete');
 
 	end();
 });
