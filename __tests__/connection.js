@@ -15,15 +15,24 @@ describe('init', () => {
 		expect(c.next.mock.calls[0][0].message).toEqual('Illegal TFTP operation.');
 	});
 
-	test('read filename and mode', () => {
+	test('read filename, mode and options', () => {
 		const filename = 'testfile';
 		const mode = 'octet';
+		const optionKey = 'optionA';
+		const optionValue = 'valueA';
+
 		const ctx = {
-			request: Buffer.concat([ RRQ, Buffer.from(filename), NULL, Buffer.from(mode), NULL ])
+			request: Buffer.concat([
+				RRQ, Buffer.from(filename), NULL,
+				Buffer.from(mode), NULL,
+				Buffer.from(optionKey), NULL,
+				Buffer.from(optionValue), NULL
+			])
 		};
 		connection().testState('init', ctx);
 		expect(ctx.filename).toEqual(filename);
 		expect(ctx.mode).toEqual(mode);
+		expect(ctx.options.get(optionKey)).toEqual(optionValue);
 	});
 
 	test('make sure filename is given', () => {
@@ -113,7 +122,7 @@ describe('getData', () => {
 		expect(c.next.mock.calls[0][0].message).toEqual(errMsg);
 	});
 
-	test('prepare Chunk if route returns data', () => {
+	test('send options ack if route returns data', () => {
 		const routes = [ {
 			handler: jest.fn()
 		} ];
@@ -121,7 +130,7 @@ describe('getData', () => {
 		const c = connection().testState('getData', ctx);
 		const res = Buffer.alloc(0);
 		routes[0].handler.mock.calls[0][1](res);
-		expect(c.next.mock.calls[0][0]).toEqual('prepareDataPacket');
+		expect(c.next.mock.calls[0][0]).toEqual('oack');
 		expect(ctx.data).toBe(res);
 		expect(ctx.block).toBe(0);
 		expect(ctx.blocksize).toBe(512);
@@ -135,6 +144,26 @@ describe('getData', () => {
 		const ctx = { routes, filename: 'file' };
 		connection().testState('getData', ctx);
 		expect(routes[1].handler.mock.calls.length).toBe(1);
+	});
+});
+
+describe('oack', () => {
+	test('negotiate options', () => {
+		const ingress = new EventEmitter();
+		const outgress = new EventEmitter();
+
+		const ctx = {
+			data: Buffer.concat([
+				Buffer.alloc(512, 'a'),
+				Buffer.alloc(1, 'b')
+			]),
+			block: 0,
+			options: new Map([['optionA', 'valueA']])
+		};
+
+		const c = connection(ingress, outgress).testState('oack', ctx);
+		ingress.emit(ctx.clientKey, Buffer.from([0, 4, 0, 0]));
+		expect(c.next.mock.calls[0][0]).toEqual('prepareDataPacket');
 	});
 });
 
