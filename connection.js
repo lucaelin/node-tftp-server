@@ -105,7 +105,6 @@ module.exports = (ingress, outgress) => edfsm({
 	const header = Buffer.alloc(2);
 	header.writeUInt16BE(6, 0); // Opcode
 
-	console.log(ctx.options);
 	const options = [...ctx.options.entries()].map(([k, v]) => {
 		let acceptedValue;
 
