@@ -61,7 +61,7 @@ module.exports = (ingress, outgress) => edfsm({
 	while (!req.endReached()) {
 		const key = req.cstr();
 		const val = req.cstr();
-		ctx.options.set(key, val);
+		if (key) ctx.options.set(key, val);
 	}
 	// console.log(ctx.options);
 
